@@ -14,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -42,16 +43,13 @@ type QueueItem struct {
 	Executable *Executable `json:"executable"`
 }
 
-const (
-	userName = "rontero"
-	token    = ""
-	baseURL  = "http://localhost:8080"
-)
-
 func jenkinsRequest(method string, path string) (*http.Response, error) {
-	auth := userName + ":" + token
+	prefs := fyne.CurrentApp().Preferences()
+
+	auth := prefs.String("username") + ":" + prefs.String("password")
 	basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
 
+	baseURL := prefs.String("url")
 	req, _ := http.NewRequest(method, baseURL+strings.Replace(path, baseURL, "", 1), nil)
 	req.Header.Add("Authorization", basicAuth)
 
@@ -67,7 +65,7 @@ func parseBody[T any](req *http.Response, v *T) error {
 func main() {
 	var jobs []Job
 
-	a := app.New()
+	a := app.NewWithID("com.github.rontero.myaws")
 	w := a.NewWindow("My AWS")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -87,19 +85,27 @@ func main() {
 		},
 	)
 
+	updateText := func(message string) {
+		fmt.Println(message)
+		fyne.Do(func() {
+			text.SetText(message)
+		})
+	}
+
 	fetchButton := widget.NewButton("Fetch Jobs", func() {
-		text.SetText("Fetching data...")
+		updateText("Fetching data...")
+
 		go func() {
 			res, err := jenkinsRequest("GET", "/api/json")
 			if err != nil {
-				fmt.Printf("Error fetching data: %v", err)
+				updateText("Error fetching data: " + err.Error())
 				return
 			}
 			defer res.Body.Close()
 
 			state := State{}
 			if err := parseBody(res, &state); err != nil {
-				fmt.Printf("Error parsing state response: %v", err)
+				updateText("Error parsing state response: " + err.Error())
 				return
 			}
 
@@ -108,9 +114,7 @@ func main() {
 				data.Append(user.Name)
 			}
 
-			fyne.Do(func() {
-				text.SetText("Tap a job to select it")
-			})
+			updateText("Tap a job to select it")
 		}()
 	})
 
@@ -123,13 +127,11 @@ func main() {
 			hyperlink.Hide()
 
 			go func() {
-				fyne.Do(func() {
-					text.SetText("Launching job: " + jobs[i].Name + "...")
-				})
+				updateText("Launching job: " + jobs[i].Name + "...")
 
 				res, err := jenkinsRequest("POST", jobs[i].URL+"build")
 				if err != nil {
-					fmt.Printf("Error launching job: %v", err)
+					updateText("Error launching job: " + err.Error())
 					return
 				}
 
@@ -151,41 +153,36 @@ func main() {
 
 						res, err := jenkinsRequest("GET", queueURL+"api/json")
 						if err != nil {
-							fmt.Printf("Error fetching queue status: %v", err)
+							updateText("Error fetching queue status: " + err.Error())
 							return
 						}
 
 						queueItem := QueueItem{}
 						if err := parseBody(res, &queueItem); err != nil {
-							fmt.Printf("URL: %s\n", res.Request.URL)
-							fmt.Printf("Error parsing queue response: %v", err)
+							updateText("Error parsing queue response: " + err.Error())
 							return
 						}
 
 						if queueItem.Executable == nil {
-							fyne.Do(func() {
-								text.SetText("Job in queue...")
-							})
+							updateText("Job in queue...")
 							continue
 						}
 
 						res, err = jenkinsRequest("GET", jobs[i].URL+"lastBuild/api/json")
 						if err != nil {
-							fmt.Printf("Error fetching job status: %v", err)
+							updateText("Error fetching job status: " + err.Error())
 							return
 						}
 						defer res.Body.Close()
 
 						lastBuild := LastBuild{}
 						if err := parseBody(res, &lastBuild); err != nil {
-							fmt.Printf("Error parsing build response: %v", err)
+							updateText("Error parsing build response: " + err.Error())
 							return
 						}
 
 						if lastBuild.Building {
-							fyne.Do(func() {
-								text.SetText("Building...")
-							})
+							updateText("Building...")
 							continue
 						} else {
 							fyne.Do(func() {
@@ -206,6 +203,39 @@ func main() {
 		container.NewHBox(
 			flex,
 			fetchButton,
+			widget.NewButton("Set up", func() {
+				urlEntry := widget.NewEntry()
+				urlEntry.SetText(a.Preferences().String("url"))
+
+				nameEntry := widget.NewEntry()
+				nameEntry.SetText(a.Preferences().String("username"))
+
+				passwordEntry := widget.NewPasswordEntry()
+				passwordEntry.SetText(a.Preferences().String("password"))
+
+				dialog.ShowForm("Setup Jenkins API", "Save", "Discard",
+					[]*widget.FormItem{
+						widget.NewFormItem("Jenkins URL", urlEntry),
+						widget.NewFormItem("Username", nameEntry),
+						widget.NewFormItem("User Token", passwordEntry),
+					},
+					func(accept bool) {
+						if accept {
+							app := fyne.CurrentApp()
+							pref := app.Preferences()
+
+							pref.SetString("url", urlEntry.Text)
+							pref.SetString("username", nameEntry.Text)
+							pref.SetString("password", passwordEntry.Text)
+
+							app.SendNotification(&fyne.Notification{
+								Title:   "Settings saved!",
+								Content: "Jenkins URL: " + urlEntry.Text,
+							})
+						}
+					}, w,
+				)
+			}),
 			widget.NewButton("Close", func() { a.Quit() }),
 		),
 		nil, nil, nil,
