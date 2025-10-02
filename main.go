@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -15,19 +17,66 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-type User struct {
-	ID          int    `json:"id"`
-	Username    string `json:"nickname"`
-	ProfileLink string `json:"github_profile"`
+type Job struct {
+	Name  string `json:"name"`
+	URL   string `json:"url"`
+	Color string `json:"color"`
+}
+
+type State struct {
+	Jobs []Job `json:"jobs"`
+}
+
+type LastBuild struct {
+	Building bool   `json:"building"`
+	Result   string `json:"result,omitempty"`
+	URL      string `json:"url"`
+}
+
+type Executable struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+}
+
+type QueueItem struct {
+	Executable *Executable `json:"executable"`
+}
+
+const (
+	userName = "rontero"
+	token    = ""
+	baseURL  = "http://localhost:8080"
+)
+
+func jenkinsRequest(method string, path string) (*http.Response, error) {
+	auth := userName + ":" + token
+	basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
+
+	req, _ := http.NewRequest(method, baseURL+strings.Replace(path, baseURL, "", 1), nil)
+	req.Header.Add("Authorization", basicAuth)
+
+	client := &http.Client{}
+	return client.Do(req)
+}
+
+func parseBody[T any](req *http.Response, v *T) error {
+	bytes, _ := io.ReadAll(req.Body)
+	return json.Unmarshal(bytes, &v)
 }
 
 func main() {
-	var users []User
+	var jobs []Job
 
 	a := app.New()
 	w := a.NewWindow("My AWS")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	text := widget.NewLabel("Fetch data test")
+	text := widget.NewLabel("My AWS")
+	hyperlink := widget.NewHyperlink("", nil)
+	hyperlink.Hide()
+	flex := container.NewHBox(text, hyperlink)
+
 	data := binding.BindStringList(&[]string{})
 	list := widget.NewListWithData(data,
 		func() fyne.CanvasObject {
@@ -37,43 +86,126 @@ func main() {
 			o.(*widget.Label).Bind(i.(binding.String))
 		},
 	)
+
+	fetchButton := widget.NewButton("Fetch Jobs", func() {
+		text.SetText("Fetching data...")
+		go func() {
+			res, err := jenkinsRequest("GET", "/api/json")
+			if err != nil {
+				fmt.Printf("Error fetching data: %v", err)
+				return
+			}
+			defer res.Body.Close()
+
+			state := State{}
+			if err := parseBody(res, &state); err != nil {
+				fmt.Printf("Error parsing state response: %v", err)
+				return
+			}
+
+			jobs = state.Jobs
+			for _, user := range jobs {
+				data.Append(user.Name)
+			}
+
+			fyne.Do(func() {
+				text.SetText("Tap a job to select it")
+			})
+		}()
+	})
+
 	list.OnSelected = func(i widget.ListItemID) {
-		user := users[i]
-		path := strings.Replace(user.ProfileLink, "https://github.com/", "", 1)
-		url := url.URL{Scheme: "https", Host: "github.com", Path: path}
-		fyne.CurrentApp().OpenURL(&url)
+		text.SetText("Job: " + jobs[i].Name)
+		fetchButton.SetText("Launch Job")
+		fetchButton.OnTapped = func() {
+			fmt.Println("Launching job: " + jobs[i].Name)
+			fetchButton.Disable()
+			hyperlink.Hide()
+
+			go func() {
+				fyne.Do(func() {
+					text.SetText("Launching job: " + jobs[i].Name + "...")
+				})
+
+				res, err := jenkinsRequest("POST", jobs[i].URL+"build")
+				if err != nil {
+					fmt.Printf("Error launching job: %v", err)
+					return
+				}
+
+				queueURL := res.Header.Get("Location")
+				ticker := time.NewTicker(time.Second * 2)
+
+				defer ticker.Stop()
+				defer fyne.Do(func() {
+					fetchButton.Enable()
+				})
+
+				for {
+					select {
+					case <-ctx.Done():
+						fmt.Println("Cancelled")
+						return
+					case <-ticker.C:
+						fmt.Println("Checking job status...")
+
+						res, err := jenkinsRequest("GET", queueURL+"api/json")
+						if err != nil {
+							fmt.Printf("Error fetching queue status: %v", err)
+							return
+						}
+
+						queueItem := QueueItem{}
+						if err := parseBody(res, &queueItem); err != nil {
+							fmt.Printf("URL: %s\n", res.Request.URL)
+							fmt.Printf("Error parsing queue response: %v", err)
+							return
+						}
+
+						if queueItem.Executable == nil {
+							fyne.Do(func() {
+								text.SetText("Job in queue...")
+							})
+							continue
+						}
+
+						res, err = jenkinsRequest("GET", jobs[i].URL+"lastBuild/api/json")
+						if err != nil {
+							fmt.Printf("Error fetching job status: %v", err)
+							return
+						}
+						defer res.Body.Close()
+
+						lastBuild := LastBuild{}
+						if err := parseBody(res, &lastBuild); err != nil {
+							fmt.Printf("Error parsing build response: %v", err)
+							return
+						}
+
+						if lastBuild.Building {
+							fyne.Do(func() {
+								text.SetText("Building...")
+							})
+							continue
+						} else {
+							fyne.Do(func() {
+								text.SetText("Build finished with " + lastBuild.Result)
+								hyperlink.SetText("See output")
+								hyperlink.SetURLFromString(lastBuild.URL + "console")
+								hyperlink.Show()
+							})
+							return
+						}
+					}
+				}
+			}()
+		}
 	}
 
 	content := container.NewBorder(
 		container.NewHBox(
-			text,
-			widget.NewButton("Fetch", func() {
-				text.SetText("Fetching data...")
-
-				go func() {
-					res, err := http.Get("https://24pullrequests.com/users.json?page=2")
-					if err != nil {
-						fmt.Printf("Error fetching data: %v", err)
-						return
-					}
-					defer res.Body.Close()
-
-					bytes, _ := io.ReadAll(res.Body)
-
-					if err := json.Unmarshal(bytes, &users); err != nil {
-						fmt.Printf("Error unmarshalling data: %v", err)
-						return
-					}
-
-					for _, user := range users {
-						data.Append(user.Username)
-					}
-
-					fyne.Do(func() {
-						text.SetText("Click to open the user profile on your browser")
-					})
-				}()
-			}),
+			flex,
+			fetchButton,
 			widget.NewButton("Close", func() { a.Quit() }),
 		),
 		nil, nil, nil,
