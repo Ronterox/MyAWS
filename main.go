@@ -245,7 +245,6 @@ func main() {
 					}, w,
 				)
 			}),
-			widget.NewButton("Close", func() { a.Quit() }),
 		),
 		nil, nil, nil,
 		list,
