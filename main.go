@@ -126,6 +126,11 @@ func main() {
 			fetchButton.Disable()
 			hyperlink.Hide()
 
+			fyne.CurrentApp().SendNotification(&fyne.Notification{
+				Title:   "Job launched: " + jobs[i].Name,
+				Content: "Waiting for build to finish...",
+			})
+
 			go func() {
 				updateText("Launching job: " + jobs[i].Name + "...")
 
@@ -190,6 +195,10 @@ func main() {
 								hyperlink.SetText("See output")
 								hyperlink.SetURLFromString(lastBuild.URL + "console")
 								hyperlink.Show()
+							})
+							fyne.CurrentApp().SendNotification(&fyne.Notification{
+								Title:   "Build finished with " + lastBuild.Result,
+								Content: lastBuild.URL + "console",
 							})
 							return
 						}
