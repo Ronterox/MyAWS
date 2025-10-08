@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/driver/mobile"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -43,6 +46,61 @@ type QueueItem struct {
 	Executable *Executable `json:"executable"`
 }
 
+type TouchableLabel struct {
+	widget.Label
+	holdDuration time.Duration
+	lastPress    time.Time
+	OnHold       func()
+	OnTapped     func()
+}
+
+func NewTouchableLabel(label string, tapped func(), hold func()) *TouchableLabel {
+	btn := &TouchableLabel{
+		holdDuration: time.Millisecond * 500,
+		OnHold:       hold,
+		OnTapped:     tapped,
+	}
+	btn.ExtendBaseWidget(btn)
+	btn.SetText(label)
+	return btn
+}
+
+func (b *TouchableLabel) OnDown() {
+	b.lastPress = time.Now()
+	go func() {
+		time.Sleep(b.holdDuration)
+		if time.Since(b.lastPress) > b.holdDuration {
+			fyne.Do(func() {
+				b.OnHold()
+			})
+		}
+	}()
+}
+
+func (b *TouchableLabel) OnUp() {
+	b.OnTapped()
+	b.lastPress = time.Now()
+}
+
+func (b *TouchableLabel) MouseDown(e *desktop.MouseEvent) {
+	b.OnDown()
+}
+
+func (b *TouchableLabel) MouseUp(e *desktop.MouseEvent) {
+	b.OnUp()
+}
+
+func (b *TouchableLabel) TouchDown(e *mobile.TouchEvent) {
+	b.OnDown()
+}
+
+func (b *TouchableLabel) TouchUp(e *mobile.TouchEvent) {
+	b.OnUp()
+}
+
+func (b *TouchableLabel) TouchCancel(e *mobile.TouchEvent) {
+}
+
 func jenkinsRequest(method string, path string) (*http.Response, error) {
 	prefs := fyne.CurrentApp().Preferences()
 
@@ -67,21 +125,57 @@ func main() {
 
 	a := app.NewWithID("com.github.rontero.myaws")
 	w := a.NewWindow("My AWS")
+
+	res, _ := fyne.LoadResourceFromPath("Icon.png")
+	a.SetIcon(res)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	text := widget.NewLabel("My AWS")
 	hyperlink := widget.NewHyperlink("", nil)
 	hyperlink.Hide()
+
 	flex := container.NewHBox(text, hyperlink)
 
 	data := binding.BindStringList(&[]string{})
 	list := widget.NewListWithData(data,
 		func() fyne.CanvasObject {
-			return widget.NewLabel("template")
+			return NewTouchableLabel("template", func() {
+				fmt.Println("Tapped!")
+			}, func() {
+				fmt.Println("Hold")
+			})
 		},
 		func(i binding.DataItem, o fyne.CanvasObject) {
-			o.(*widget.Label).Bind(i.(binding.String))
+			label := o.(*TouchableLabel)
+			label.Bind(i.(binding.String))
+
+			label.OnHold = func() {
+				var popup *widget.PopUp
+				var url *url.URL
+
+				name, _ := i.(binding.String).Get()
+				for _, job := range jobs {
+					if job.Name == name {
+						url, _ = url.Parse(job.URL)
+						break
+					}
+				}
+
+				popup = widget.NewModalPopUp(
+					container.NewVBox(
+						widget.NewHyperlink("See '"+name+"' on Jenkins", url),
+						widget.NewButton("Cancel", func() {
+							popup.Hide()
+						}),
+					),
+					w.Canvas(),
+				)
+
+				popup.Resize(fyne.NewSize(200, 100))
+				popup.Show()
+			}
 		},
 	)
 
@@ -126,15 +220,16 @@ func main() {
 			fetchButton.Disable()
 			hyperlink.Hide()
 
-			fyne.CurrentApp().SendNotification(&fyne.Notification{
-				Title:   "Job launched: " + jobs[i].Name,
-				Content: "Waiting for build to finish...",
-			})
-
 			go func() {
 				updateText("Launching job: " + jobs[i].Name + "...")
 
 				res, err := jenkinsRequest("POST", jobs[i].URL+"build")
+
+				fyne.CurrentApp().SendNotification(&fyne.Notification{
+					Title:   "Job launched: " + jobs[i].Name,
+					Content: "Waiting for job to finish...",
+				})
+
 				if err != nil {
 					updateText("Error launching job: " + err.Error())
 					return
@@ -193,7 +288,7 @@ func main() {
 							fyne.Do(func() {
 								text.SetText("Build finished with " + lastBuild.Result)
 								hyperlink.SetText("See output")
-								hyperlink.SetURLFromString(lastBuild.URL + "console")
+								hyperlink.SetURLFromString(lastBuild.URL + "consoleText")
 								hyperlink.Show()
 							})
 							fyne.CurrentApp().SendNotification(&fyne.Notification{
@@ -208,44 +303,49 @@ func main() {
 		}
 	}
 
+	setUpButton := widget.NewButton("Set up", func() {
+		urlEntry := widget.NewEntry()
+		urlEntry.SetText(a.Preferences().String("url"))
+
+		nameEntry := widget.NewEntry()
+		nameEntry.SetText(a.Preferences().String("username"))
+
+		passwordEntry := widget.NewPasswordEntry()
+		passwordEntry.SetText(a.Preferences().String("password"))
+
+		dialog.ShowForm("Setup Jenkins API", "Save", "Discard",
+			[]*widget.FormItem{
+				widget.NewFormItem("Jenkins URL", urlEntry),
+				widget.NewFormItem("Username", nameEntry),
+				widget.NewFormItem("User Token", passwordEntry),
+			},
+			func(accept bool) {
+				if accept {
+					app := fyne.CurrentApp()
+					pref := app.Preferences()
+
+					pref.SetString("url", urlEntry.Text)
+					pref.SetString("username", nameEntry.Text)
+					pref.SetString("password", passwordEntry.Text)
+
+					app.SendNotification(&fyne.Notification{
+						Title:   "Settings saved!",
+						Content: "Jenkins URL: " + urlEntry.Text,
+					})
+				}
+			}, w,
+		)
+	})
+
+	actionbar := container.NewScroll(container.NewHBox(
+		flex,
+		fetchButton,
+		setUpButton,
+	))
+	actionbar.Direction = container.ScrollHorizontalOnly
+
 	content := container.NewBorder(
-		container.NewHBox(
-			flex,
-			fetchButton,
-			widget.NewButton("Set up", func() {
-				urlEntry := widget.NewEntry()
-				urlEntry.SetText(a.Preferences().String("url"))
-
-				nameEntry := widget.NewEntry()
-				nameEntry.SetText(a.Preferences().String("username"))
-
-				passwordEntry := widget.NewPasswordEntry()
-				passwordEntry.SetText(a.Preferences().String("password"))
-
-				dialog.ShowForm("Setup Jenkins API", "Save", "Discard",
-					[]*widget.FormItem{
-						widget.NewFormItem("Jenkins URL", urlEntry),
-						widget.NewFormItem("Username", nameEntry),
-						widget.NewFormItem("User Token", passwordEntry),
-					},
-					func(accept bool) {
-						if accept {
-							app := fyne.CurrentApp()
-							pref := app.Preferences()
-
-							pref.SetString("url", urlEntry.Text)
-							pref.SetString("username", nameEntry.Text)
-							pref.SetString("password", passwordEntry.Text)
-
-							app.SendNotification(&fyne.Notification{
-								Title:   "Settings saved!",
-								Content: "Jenkins URL: " + urlEntry.Text,
-							})
-						}
-					}, w,
-				)
-			}),
-		),
+		actionbar,
 		nil, nil, nil,
 		list,
 	)
