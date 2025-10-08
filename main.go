@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/url"
@@ -121,6 +122,12 @@ func parseBody[T any](req *http.Response, v *T) error {
 	return json.Unmarshal(bytes, &v)
 }
 
+func TextToPositiveInt(s string) int {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return int(h.Sum32() & 0x7fffffff) // mask sign bit
+}
+
 func main() {
 	var jobs []Job
 	var list *widget.List
@@ -141,16 +148,18 @@ func main() {
 	data := binding.BindStringList(&[]string{})
 	list = widget.NewListWithData(data,
 		func() fyne.CanvasObject {
-			return NewTouchableLabel("template", func() {
-				fmt.Println("Tapped!")
-			}, func() {
-				fmt.Println("Hold")
-			})
+			return container.NewPadded(
+				NewTouchableLabel("template", func() {
+					fmt.Println("Tapped!")
+				}, func() {
+					fmt.Println("Hold")
+				}),
+				widget.NewIcon(theme.HomeIcon()),
+			)
 		},
 		func(i binding.DataItem, o fyne.CanvasObject) {
-			label := o.(*TouchableLabel)
+			label := o.(*fyne.Container).Objects[0].(*TouchableLabel)
 			label.Bind(i.(binding.String))
-
 			label.OnTapped = func() {
 				items, _ := data.Get()
 				for i, item := range items {
@@ -187,6 +196,22 @@ func main() {
 				popup.Resize(fyne.NewSize(200, 100))
 				popup.Show()
 			}
+
+			icons := []fyne.Resource{
+				theme.HomeIcon(),
+				theme.ComputerIcon(),
+				theme.AccountIcon(),
+				theme.DesktopIcon(),
+				theme.FileTextIcon(),
+				theme.FileApplicationIcon(),
+				theme.HistoryIcon(),
+				theme.GridIcon(),
+				theme.DocumentPrintIcon(),
+				theme.DocumentSaveIcon(),
+			}
+
+			icon := o.(*fyne.Container).Objects[1].(*widget.Icon)
+			icon.SetResource(icons[TextToPositiveInt(label.Text)%len(icons)])
 		},
 	)
 
@@ -385,13 +410,11 @@ func main() {
 
 				fullURL := userURL + "/user/" + user + "/security/"
 				link := widget.NewHyperlink(fullURL, nil)
-
-				url, err := url.Parse(fullURL)
-				if err != nil {
+				if err := link.SetURLFromString(fullURL); err != nil {
 					link.Hide()
-				} else {
-					link.SetURL(url)
 				}
+
+				syntaxURL, _ := url.Parse("https://www.jenkins.io/doc/book/pipeline/syntax/")
 
 				popup = widget.NewModalPopUp(
 					container.NewVBox(
@@ -408,6 +431,7 @@ jenkins.url/user/username/security/
 Note: If you add the url and username in the settings, you can come here and click your generated url.
 						`),
 						link,
+						widget.NewHyperlink("See scripts examples", syntaxURL),
 						widget.NewButton("Close", func() {
 							popup.Hide()
 						}),
@@ -420,6 +444,10 @@ Note: If you add the url and username in the settings, you can come here and cli
 		list,
 	)
 
+	a.Lifecycle().SetOnStarted(func() {
+		fetchButton.Tapped(nil)
+	})
+	fmt.Println("Starting app...")
 	w.SetContent(content)
 	w.ShowAndRun()
 }
