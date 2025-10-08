@@ -50,15 +50,15 @@ type TouchableLabel struct {
 	widget.Label
 	holdDuration time.Duration
 	lastPress    time.Time
-	onHold       func()
-	onTapped     func()
+	OnHold       func()
+	OnTapped     func()
 }
 
 func NewTouchableLabel(label string, tapped func(), hold func()) *TouchableLabel {
 	btn := &TouchableLabel{
 		holdDuration: time.Millisecond * 500,
-		onHold:       hold,
-		onTapped:     tapped,
+		OnHold:       hold,
+		OnTapped:     tapped,
 	}
 	btn.ExtendBaseWidget(btn)
 	btn.SetText(label)
@@ -71,14 +71,14 @@ func (b *TouchableLabel) OnDown() {
 		time.Sleep(b.holdDuration)
 		if time.Since(b.lastPress) > b.holdDuration {
 			fyne.Do(func() {
-				b.onHold()
+				b.OnHold()
 			})
 		}
 	}()
 }
 
 func (b *TouchableLabel) OnUp() {
-	b.onTapped()
+	b.OnTapped()
 	b.lastPress = time.Now()
 }
 
@@ -122,6 +122,7 @@ func parseBody[T any](req *http.Response, v *T) error {
 
 func main() {
 	var jobs []Job
+	var list *widget.List
 
 	a := app.NewWithID("com.github.rontero.myaws")
 	w := a.NewWindow("My AWS")
@@ -137,7 +138,7 @@ func main() {
 	flex := container.NewHBox(text, hyperlink)
 
 	data := binding.BindStringList(&[]string{})
-	list := widget.NewListWithData(data,
+	list = widget.NewListWithData(data,
 		func() fyne.CanvasObject {
 			return NewTouchableLabel("template", func() {
 				fmt.Println("Tapped!")
@@ -149,9 +150,20 @@ func main() {
 			label := o.(*TouchableLabel)
 			label.Bind(i.(binding.String))
 
-			label.onHold = func() {
+			label.OnTapped = func() {
+				items, _ := data.Get()
+				for i, item := range items {
+					if item == label.Text {
+						list.Select(i)
+						break
+					}
+				}
+			}
+			label.OnHold = func() {
 				var popup *widget.PopUp
 				var url *url.URL
+
+				label.OnTapped()
 
 				name, _ := i.(binding.String).Get()
 				for _, job := range jobs {
@@ -164,7 +176,7 @@ func main() {
 				popup = widget.NewModalPopUp(
 					container.NewVBox(
 						widget.NewHyperlink("See '"+name+"' on Jenkins", url),
-						widget.NewButton("Cancel", func() {
+						widget.NewButton("Close", func() {
 							popup.Hide()
 						}),
 					),
@@ -214,7 +226,6 @@ func main() {
 		text.SetText("Job: " + jobs[i].Name)
 		fetchButton.SetText("Launch Job")
 		fetchButton.OnTapped = func() {
-			fmt.Println("Launching job: " + jobs[i].Name)
 			fetchButton.Disable()
 			hyperlink.Hide()
 
