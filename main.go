@@ -444,9 +444,10 @@ Note: If you add the url and username in the settings, you can come here and cli
 		list,
 	)
 
-	a.Lifecycle().SetOnStarted(func() {
+	go func() {
 		fetchButton.Tapped(nil)
-	})
+	}()
+
 	fmt.Println("Starting app...")
 	w.SetContent(content)
 	w.ShowAndRun()
