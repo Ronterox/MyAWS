@@ -50,15 +50,15 @@ type TouchableLabel struct {
 	widget.Label
 	holdDuration time.Duration
 	lastPress    time.Time
-	OnHold       func()
-	OnTapped     func()
+	onHold       func()
+	onTapped     func()
 }
 
 func NewTouchableLabel(label string, tapped func(), hold func()) *TouchableLabel {
 	btn := &TouchableLabel{
 		holdDuration: time.Millisecond * 500,
-		OnHold:       hold,
-		OnTapped:     tapped,
+		onHold:       hold,
+		onTapped:     tapped,
 	}
 	btn.ExtendBaseWidget(btn)
 	btn.SetText(label)
@@ -71,14 +71,14 @@ func (b *TouchableLabel) OnDown() {
 		time.Sleep(b.holdDuration)
 		if time.Since(b.lastPress) > b.holdDuration {
 			fyne.Do(func() {
-				b.OnHold()
+				b.onHold()
 			})
 		}
 	}()
 }
 
 func (b *TouchableLabel) OnUp() {
-	b.OnTapped()
+	b.onTapped()
 	b.lastPress = time.Now()
 }
 
@@ -125,9 +125,7 @@ func main() {
 
 	a := app.NewWithID("com.github.rontero.myaws")
 	w := a.NewWindow("My AWS")
-
-	res, _ := fyne.LoadResourceFromPath("Icon.png")
-	a.SetIcon(res)
+	a.SetIcon(resourceIconPng)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -151,7 +149,7 @@ func main() {
 			label := o.(*TouchableLabel)
 			label.Bind(i.(binding.String))
 
-			label.OnHold = func() {
+			label.onHold = func() {
 				var popup *widget.PopUp
 				var url *url.URL
 
