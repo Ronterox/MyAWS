@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/driver/mobile"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -353,9 +354,69 @@ func main() {
 	))
 	actionbar.Direction = container.ScrollHorizontalOnly
 
+	openJenkins := func(path string) {
+		baseURL := a.Preferences().String("url")
+		url, err := url.Parse(baseURL + path)
+		if err != nil {
+			updateText("Error parsing URL: " + err.Error())
+			return
+		}
+		a.OpenURL(url)
+	}
+
 	content := container.NewBorder(
 		actionbar,
-		nil, nil, nil,
+		widget.NewToolbar(
+			widget.NewToolbarAction(theme.FolderNewIcon(), func() {
+				openJenkins("/view/all/newJob")
+			}),
+			widget.NewToolbarSeparator(),
+			widget.NewToolbarAction(theme.ComputerIcon(), func() {
+				openJenkins("/computer")
+			}),
+			widget.NewToolbarAction(theme.SettingsIcon(), func() {
+				openJenkins("/manage")
+			}),
+			widget.NewToolbarSpacer(),
+			widget.NewToolbarAction(theme.HelpIcon(), func() {
+				var popup *widget.PopUp
+				userURL := a.Preferences().String("url")
+				user := a.Preferences().String("username")
+
+				fullURL := userURL + "/user/" + user + "/security/"
+				link := widget.NewHyperlink(fullURL, nil)
+
+				url, err := url.Parse(fullURL)
+				if err != nil {
+					link.Hide()
+				} else {
+					link.SetURL(url)
+				}
+
+				popup = widget.NewModalPopUp(
+					container.NewVBox(
+						widget.NewLabel(`
+Welcome to my custom AWS app!
+
+If you are using a VPN, make sure to connect to it first.
+
+First you will have to set up your Jenkins URL in the settings.
+Also you will need to create an user token in Jenkins.
+
+jenkins.url/user/username/security/
+
+Note: If you add the url and username in the settings, you can come here and click your generated url.
+						`),
+						link,
+						widget.NewButton("Close", func() {
+							popup.Hide()
+						}),
+					),
+					w.Canvas(),
+				)
+				popup.Show()
+			}),
+		), nil, nil,
 		list,
 	)
 
