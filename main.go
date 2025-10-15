@@ -119,15 +119,21 @@ func (b *TouchableLabel) TouchUp(e *mobile.TouchEvent) {
 func (b *TouchableLabel) TouchCancel(e *mobile.TouchEvent) {
 }
 
-func jenkinsRequest(method string, path string) (*http.Response, error) {
+func jenkinsRequest(method string, path string, data *url.Values) (*http.Response, error) {
 	prefs := fyne.CurrentApp().Preferences()
 
 	auth := prefs.String("username") + ":" + prefs.String("password")
 	basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
 
+	var reqData io.Reader
+	if data != nil {
+		reqData = strings.NewReader(data.Encode())
+	}
+
 	baseURL := prefs.String("url")
-	req, _ := http.NewRequest(method, baseURL+strings.Replace(path, baseURL, "", 1), nil)
+	req, _ := http.NewRequest(method, baseURL+strings.Replace(path, baseURL, "", 1), reqData)
 	req.Header.Add("Authorization", basicAuth)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
 	client := &http.Client{}
 	return client.Do(req)
@@ -243,7 +249,7 @@ func main() {
 		updateText("Fetching data...")
 
 		go func() {
-			res, err := jenkinsRequest("GET", "/api/json")
+			res, err := jenkinsRequest("GET", "/api/json", nil)
 			if err != nil {
 				updateText("Error fetching data: " + err.Error())
 				return
@@ -262,19 +268,95 @@ func main() {
 			}
 
 			updateText("Tap a job to select it")
-
-			fyne.Do(func() {
-				list.Refresh()
-			})
 		}()
 	})
+
+	launchJob := func(job Job, request func() (*http.Response, error)) {
+		updateText("Launching job: " + job.Name + "...")
+		res, err := request()
+
+		fyne.CurrentApp().SendNotification(&fyne.Notification{
+			Title:   "Job launched: " + job.Name,
+			Content: "Waiting for job to finish...",
+		})
+
+		if err != nil {
+			updateText("Error launching job: " + err.Error())
+			return
+		}
+
+		queueURL := res.Header.Get("Location")
+		ticker := time.NewTicker(time.Second * 2)
+
+		defer ticker.Stop()
+		defer fyne.Do(func() {
+			fetchButton.Enable()
+		})
+
+		for {
+			select {
+			case <-ctx.Done():
+				fmt.Println("Cancelled")
+				return
+			case <-ticker.C:
+				fmt.Println("Checking job status...")
+
+				res, err := jenkinsRequest("GET", queueURL+"api/json", nil)
+				if err != nil {
+					updateText("Error fetching queue status: " + err.Error())
+					return
+				}
+
+				queueItem := QueueItem{}
+				if err := parseBody(res, &queueItem); err != nil {
+					updateText("Error parsing queue response: " + err.Error())
+					return
+				}
+
+				if queueItem.Executable == nil {
+					updateText("Job in queue...")
+					continue
+				}
+
+				res, err = jenkinsRequest("GET", job.URL+"lastBuild/api/json", nil)
+				if err != nil {
+					updateText("Error fetching job status: " + err.Error())
+					return
+				}
+				defer res.Body.Close()
+
+				lastBuild := LastBuild{}
+				if err := parseBody(res, &lastBuild); err != nil {
+					updateText("Error parsing build response: " + err.Error())
+					return
+				}
+
+				if lastBuild.Building {
+					updateText("Building...")
+					continue
+				} else {
+					fyne.Do(func() {
+						text.SetText("Build finished with " + lastBuild.Result)
+						hyperlink.SetText("See output")
+						hyperlink.SetURLFromString(lastBuild.URL + "consoleText")
+						hyperlink.Show()
+					})
+					fyne.CurrentApp().SendNotification(&fyne.Notification{
+						Title:   "Build finished with " + lastBuild.Result,
+						Content: lastBuild.URL + "console",
+					})
+					return
+				}
+			}
+		}
+	}
 
 	list.OnSelected = func(i widget.ListItemID) {
 		text.SetText("Job: " + jobs[i].Name)
 		fetchButton.SetText("Launch Job")
 
 		go func() {
-			res, err := jenkinsRequest("GET", "/job/"+jobs[i].Name+"/api/json")
+			res, err := jenkinsRequest("GET", "/job/"+jobs[i].Name+"/api/json", nil)
 			if err != nil {
 				updateText("Error fetching job properties: " + err.Error())
 				return
@@ -286,7 +368,7 @@ func main() {
 				return
 			}
 
-			if len(job.Properties) > 0 {
+			if len(job.Properties) > 1 {
 				parameters := job.Properties[0].Parameters
 
 				fetchButton.OnTapped = func() {
@@ -294,6 +376,7 @@ func main() {
 					hyperlink.Hide()
 
 					widgets := make([]*widget.FormItem, len(parameters))
+					entries := make([]*widget.Entry, len(parameters))
 					for i, parameter := range parameters {
 						entry := widget.NewEntry()
 						entry.SetText(parameter.Default.Value)
@@ -302,104 +385,37 @@ func main() {
 						item.HintText = parameter.Desc
 
 						widgets[i] = item
+						entries[i] = entry
 					}
 
 					dialog.ShowForm("Job properties", "Launch", "Cancel",
 						widgets,
 						func(accept bool) {
-							fetchButton.Enable()
+							if accept {
+								go launchJob(jobs[i], func() (*http.Response, error) {
+									data := url.Values{}
+									for i, entry := range entries {
+										data.Add(parameters[i].Name, entry.Text)
+									}
+									return jenkinsRequest("POST", jobs[i].URL+"buildWithParameters", &data)
+								})
+							} else {
+								fetchButton.Enable()
+							}
 						}, w,
 					)
 				}
+			} else {
+				fetchButton.OnTapped = func() {
+					fetchButton.Disable()
+					hyperlink.Hide()
+					go launchJob(jobs[i], func() (*http.Response, error) {
+						return jenkinsRequest("POST", jobs[i].URL+"build", nil)
+					})
+				}
 			}
+
 		}()
-		return
-
-		fetchButton.OnTapped = func() {
-			fetchButton.Disable()
-			hyperlink.Hide()
-
-			go func() {
-				updateText("Launching job: " + jobs[i].Name + "...")
-
-				res, err := jenkinsRequest("POST", jobs[i].URL+"build")
-
-				fyne.CurrentApp().SendNotification(&fyne.Notification{
-					Title:   "Job launched: " + jobs[i].Name,
-					Content: "Waiting for job to finish...",
-				})
-
-				if err != nil {
-					updateText("Error launching job: " + err.Error())
-					return
-				}
-
-				queueURL := res.Header.Get("Location")
-				ticker := time.NewTicker(time.Second * 2)
-
-				defer ticker.Stop()
-				defer fyne.Do(func() {
-					fetchButton.Enable()
-				})
-
-				for {
-					select {
-					case <-ctx.Done():
-						fmt.Println("Cancelled")
-						return
-					case <-ticker.C:
-						fmt.Println("Checking job status...")
-
-						res, err := jenkinsRequest("GET", queueURL+"api/json")
-						if err != nil {
-							updateText("Error fetching queue status: " + err.Error())
-							return
-						}
-
-						queueItem := QueueItem{}
-						if err := parseBody(res, &queueItem); err != nil {
-							updateText("Error parsing queue response: " + err.Error())
-							return
-						}
-
-						if queueItem.Executable == nil {
-							updateText("Job in queue...")
-							continue
-						}
-
-						res, err = jenkinsRequest("GET", jobs[i].URL+"lastBuild/api/json")
-						if err != nil {
-							updateText("Error fetching job status: " + err.Error())
-							return
-						}
-						defer res.Body.Close()
-
-						lastBuild := LastBuild{}
-						if err := parseBody(res, &lastBuild); err != nil {
-							updateText("Error parsing build response: " + err.Error())
-							return
-						}
-
-						if lastBuild.Building {
-							updateText("Building...")
-							continue
-						} else {
-							fyne.Do(func() {
-								text.SetText("Build finished with " + lastBuild.Result)
-								hyperlink.SetText("See output")
-								hyperlink.SetURLFromString(lastBuild.URL + "consoleText")
-								hyperlink.Show()
-							})
-							fyne.CurrentApp().SendNotification(&fyne.Notification{
-								Title:   "Build finished with " + lastBuild.Result,
-								Content: lastBuild.URL + "console",
-							})
-							return
-						}
-					}
-				}
-			}()
-		}
 	}
 
 	setUpButton := widget.NewButton("Set up", func() {
