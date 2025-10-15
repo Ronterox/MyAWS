@@ -23,10 +23,26 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+type DefaultParameter struct {
+	Class string `json:"_class"`
+	Value string `json:"value"`
+}
+
+type Parameter struct {
+	Name    string           `json:"name"`
+	Desc    string           `json:"description"`
+	Default DefaultParameter `json:"defaultParameterValue"`
+}
+
+type Property struct {
+	Parameters []Parameter `json:"parameterDefinitions"`
+}
+
 type Job struct {
-	Name  string `json:"name"`
-	URL   string `json:"url"`
-	Color string `json:"color"`
+	Name       string     `json:"name"`
+	URL        string     `json:"url"`
+	Color      string     `json:"color"`
+	Properties []Property `json:"property"`
 }
 
 type State struct {
@@ -159,7 +175,9 @@ func main() {
 		},
 		func(i binding.DataItem, o fyne.CanvasObject) {
 			label := o.(*fyne.Container).Objects[0].(*TouchableLabel)
+			name, _ := i.(binding.String).Get()
 			label.Bind(i.(binding.String))
+
 			label.OnTapped = func() {
 				items, _ := data.Get()
 				for i, item := range items {
@@ -175,7 +193,6 @@ func main() {
 
 				label.OnTapped()
 
-				name, _ := i.(binding.String).Get()
 				for _, job := range jobs {
 					if job.Name == name {
 						url, _ = url.Parse(job.URL)
@@ -211,7 +228,7 @@ func main() {
 			}
 
 			icon := o.(*fyne.Container).Objects[1].(*widget.Icon)
-			icon.SetResource(icons[TextToPositiveInt(label.Text)%len(icons)])
+			icon.SetResource(icons[TextToPositiveInt(name)%len(icons)])
 		},
 	)
 
@@ -245,12 +262,59 @@ func main() {
 			}
 
 			updateText("Tap a job to select it")
+
+			fyne.Do(func() {
+				list.Refresh()
+			})
 		}()
 	})
 
 	list.OnSelected = func(i widget.ListItemID) {
 		text.SetText("Job: " + jobs[i].Name)
 		fetchButton.SetText("Launch Job")
+
+		go func() {
+			res, err := jenkinsRequest("GET", "/job/"+jobs[i].Name+"/api/json")
+			if err != nil {
+				updateText("Error fetching job properties: " + err.Error())
+				return
+			}
+
+			job := Job{}
+			if err := parseBody(res, &job); err != nil {
+				updateText("Error parsing job properties: " + err.Error())
+				return
+			}
+
+			if len(job.Properties) > 0 {
+				parameters := job.Properties[0].Parameters
+
+				fetchButton.OnTapped = func() {
+					fetchButton.Disable()
+					hyperlink.Hide()
+
+					widgets := make([]*widget.FormItem, len(parameters))
+					for i, parameter := range parameters {
+						entry := widget.NewEntry()
+						entry.SetText(parameter.Default.Value)
+
+						item := widget.NewFormItem(parameter.Name, entry)
+						item.HintText = parameter.Desc
+
+						widgets[i] = item
+					}
+
+					dialog.ShowForm("Job properties", "Launch", "Cancel",
+						widgets,
+						func(accept bool) {
+							fetchButton.Enable()
+						}, w,
+					)
+				}
+			}
+		}()
+		return
+
 		fetchButton.OnTapped = func() {
 			fetchButton.Disable()
 			hyperlink.Hide()
