@@ -369,7 +369,14 @@ func main() {
 			}
 
 			if len(job.Properties) > 1 {
-				parameters := job.Properties[0].Parameters
+				var parameters []Parameter
+
+				for _, property := range job.Properties {
+					if len(property.Parameters) > 0 {
+						parameters = property.Parameters
+						break
+					}
+				}
 
 				fetchButton.OnTapped = func() {
 					fetchButton.Disable()
