@@ -35,6 +35,7 @@ type Parameter struct {
 }
 
 type Property struct {
+	Class      string      `json:"_class"`
 	Parameters []Parameter `json:"parameterDefinitions"`
 }
 
@@ -368,16 +369,18 @@ func main() {
 				return
 			}
 
+			var parameters []Parameter
 			if len(job.Properties) > 1 {
-				var parameters []Parameter
-
 				for _, property := range job.Properties {
-					if len(property.Parameters) > 0 {
+					if property.Class == "hudson.model.ParametersDefinitionProperty" {
 						parameters = property.Parameters
 						break
 					}
 				}
+			}
 
+			if len(parameters) > 0 {
+				fyne.Do(func() { fetchButton.SetText("Launch Job With Parameters") })
 				fetchButton.OnTapped = func() {
 					fetchButton.Disable()
 					hyperlink.Hide()
