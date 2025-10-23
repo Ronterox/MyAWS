@@ -1,6 +1,16 @@
-#!/usr/bin/bash -x
+#!/usr/bin/env bash
 
-set -e
+if [ ! -f webservices.apk ]; then
+    echo "webservices.apk not found, packaging..."
+    fyne package -os android -app-id com.mikop.aws -icon Icon.png
 
-fyne package -os android -app-id com.mikop.aws -icon Icon.png
-adb install webservices.apk
+    exitCode=$?
+    if [ "$exitCode" -ne 0 ]; then
+        echo "Error packaging app, installation aborted"
+        exit $exitCode
+    fi
+
+    echo "Done packaging app, success!"
+fi
+
+adb install webservices.apk && rm webservices.apk
