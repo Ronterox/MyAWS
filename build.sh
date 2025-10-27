@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 
-if [ ! -f webservices.apk ]; then
-    echo "webservices.apk not found, packaging..."
-    pkl eval config.pkl -p version="$(gitv)" > FyneApp.toml
+set -e
+
+name="webservices"
+version="$(git count | grep -o '[0-9]' | paste -sd. | awk -F. '{print (NF<3?"0.":"")$0}')"
+
+if [ ! -f "$name.apk" ]; then
+    echo "$name.apk not found..."
+
+    echo "Generating FyneApp.toml..."
+    pkl eval config.pkl -p name="$name" -p version="$version" > FyneApp.toml
+
+    echo "Packaging app..."
     fyne package -os android
-
-    exitCode=$?
-    if [ "$exitCode" -ne 0 ]; then
-        echo "Error packaging app, installation aborted"
-        exit $exitCode
-    fi
-
     echo "Done packaging app, success!"
 fi
 

@@ -4,7 +4,7 @@ Website = "https://flandre.com"
 
 Details {
     Icon = "Icon.png"
-    Name = "My AWS"
+    Name = read("prop:name")
     ID = "com.mikop.aws"
     Version = read("prop:version")
     Build = 3
