@@ -2,7 +2,8 @@
 
 if [ ! -f webservices.apk ]; then
     echo "webservices.apk not found, packaging..."
-    fyne package -os android -app-id com.mikop.aws -icon Icon.png
+    pkl eval config.pkl -p version="$(gitv)" > FyneApp.toml
+    fyne package -os android
 
     exitCode=$?
     if [ "$exitCode" -ne 0 ]; then

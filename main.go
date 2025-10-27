@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -479,20 +480,26 @@ func main() {
 		a.OpenURL(url)
 	}
 
+	openPort := func(port int) {
+		baseURL := a.Preferences().String("url")
+		baseURL = regexp.MustCompile(`:[0-9]+$`).ReplaceAllString(baseURL, fmt.Sprintf(":%d", port))
+		url, err := url.Parse(baseURL)
+		if err != nil {
+			updateText("Error parsing URL: " + err.Error())
+			return
+		}
+		a.OpenURL(url)
+	}
+
 	content := container.NewBorder(
 		actionbar,
 		widget.NewToolbar(
-			widget.NewToolbarAction(theme.FolderNewIcon(), func() {
-				openJenkins("/view/all/newJob")
-			}),
+			widget.NewToolbarAction(theme.FolderNewIcon(), func() { openJenkins("/view/all/newJob") }),
 			widget.NewToolbarSeparator(),
-			widget.NewToolbarAction(theme.ComputerIcon(), func() {
-				openJenkins("/computer")
-			}),
-			widget.NewToolbarAction(theme.SettingsIcon(), func() {
-				openJenkins("/manage")
-			}),
+			widget.NewToolbarAction(theme.ComputerIcon(), func() { openPort(6125) }),
+			widget.NewToolbarAction(theme.StorageIcon(), func() { openPort(7682) }),
 			widget.NewToolbarSpacer(),
+			widget.NewToolbarAction(theme.SettingsIcon(), func() { openJenkins("/manage") }),
 			widget.NewToolbarAction(theme.HelpIcon(), func() {
 				var popup *widget.PopUp
 				userURL := a.Preferences().String("url")
@@ -505,12 +512,15 @@ func main() {
 				}
 
 				syntaxURL, _ := url.Parse("https://www.jenkins.io/doc/book/pipeline/syntax/")
+				version := a.Metadata().Version
+				appname := a.Metadata().Name
+
+				title := widget.NewLabel("Welcome to " + appname + " version " + version)
+				title.TextStyle.Bold = true
 
 				popup = widget.NewModalPopUp(
 					container.NewVBox(
-						widget.NewLabel(`
-Welcome to my custom AWS app!
-
+						title, widget.NewLabel(`
 If you are using a VPN, make sure to connect to it first.
 
 First you will have to set up your Jenkins URL in the settings.
@@ -518,13 +528,10 @@ Also you will need to create an user token in Jenkins.
 
 jenkins.url/user/username/security/
 
-Note: If you add the url and username in the settings, you can come here and click your generated url.
-						`),
+Note: If you add the url and username in the settings, you can come here and click your generated url.`),
 						link,
 						widget.NewHyperlink("See scripts examples", syntaxURL),
-						widget.NewButton("Close", func() {
-							popup.Hide()
-						}),
+						widget.NewButton("Close", func() { popup.Hide() }),
 					),
 					w.Canvas(),
 				)

@@ -1,0 +1,8 @@
+Website = "https://flandre.com"
+
+[Details]
+Icon = "Icon.png"
+Name = "My AWS"
+ID = "com.mikop.aws"
+Version = "1.0.0"
+Build = 3

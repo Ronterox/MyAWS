@@ -1,0 +1,15 @@
+import "package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0#/toml.pkl"
+
+Website = "https://flandre.com"
+
+Details {
+    Icon = "Icon.png"
+    Name = "My AWS"
+    ID = "com.mikop.aws"
+    Version = read("prop:version")
+    Build = 3
+}
+
+output {
+  renderer = new toml.Renderer {}
+}
